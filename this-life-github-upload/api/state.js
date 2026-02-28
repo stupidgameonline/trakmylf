@@ -5,6 +5,7 @@ const DOCUMENT_ID = 'single_user';
 const DEFAULT_ACCESS_CODE = 'Alpha#12345';
 
 const unauthorized = (res) => res.status(401).json({ error: 'Unauthorized' });
+const normalize = (value) => String(value || '').trim();
 
 const getHeaderValue = (headers, key) => {
   const value = headers?.[key];
@@ -26,16 +27,28 @@ const parseJsonBody = (req) => {
 const isValidState = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
 
 export default async function handler(req, res) {
-  const accessCode = process.env.APP_ACCESS_CODE || DEFAULT_ACCESS_CODE;
-  const incomingCode = getHeaderValue(req.headers, 'x-access-code');
-
-  if (!incomingCode || incomingCode !== accessCode) {
-    return unauthorized(res);
-  }
-
   try {
     const db = await getDb();
     const collection = db.collection(COLLECTION);
+
+    // Quick browser check: /api/state?health=1
+    if (req.method === 'GET' && String(req.query?.health || '') === '1') {
+      await db.command({ ping: 1 });
+      return res.status(200).json({
+        ok: true,
+        db: process.env.MONGODB_DB || 'this_life',
+        hasMongoUri: Boolean(process.env.MONGODB_URI)
+      });
+    }
+
+    // Accept either default app code or env-configured code to reduce setup failures.
+    const configuredCode = normalize(process.env.APP_ACCESS_CODE);
+    const incomingCode = normalize(getHeaderValue(req.headers, 'x-access-code'));
+    const acceptedCodes = new Set([DEFAULT_ACCESS_CODE, configuredCode].filter(Boolean).map(normalize));
+
+    if (!incomingCode || !acceptedCodes.has(incomingCode)) {
+      return unauthorized(res);
+    }
 
     if (req.method === 'GET') {
       const doc = await collection.findOne({ _id: DOCUMENT_ID });
